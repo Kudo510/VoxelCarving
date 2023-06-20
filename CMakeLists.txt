@@ -1,0 +1,17 @@
+CMAKE_MINIMUM_REQUIRED(VERSION 2.6)
+PROJECT(Voxel-Carving)
+
+# required packages
+FIND_PACKAGE(OpenCV REQUIRED)
+FIND_PACKAGE(VTK REQUIRED)
+
+
+# required macros and variables
+INCLUDE(${VTK_USE_FILE})
+
+FILE(GLOB SOURCES 	${CMAKE_SOURCE_DIR}/src/*.cpp 
+                    ${CMAKE_SOURCE_DIR}/src/*.h)
+
+ADD_EXECUTABLE(main ${SOURCES})
+
+TARGET_LINK_LIBRARIES(main ${OpenCV_LIBS} ${VTK_LIBRARIES})

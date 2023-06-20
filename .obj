@@ -1,0 +1,7 @@
+# wavefront obj file written by the visualization toolkit
+
+mtllib .mtl
+
+
+g grp1
+usemtl mtl1
