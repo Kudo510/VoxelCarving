@@ -1,0 +1,104 @@
+#include "common.h"
+#include "utils.h"
+#include "rendering.h"
+#include "voxel_carving.h"
+#include "voxel_colouring.h"
+
+int main(int argc, char *argv[])
+{
+
+    /* acquire camera images, silhouettes and camera matrix of squirrel*/
+    std::vector<camera> cameras;
+
+    cv::FileStorage fs("../assets/dataset/viff.xml", cv::FileStorage::READ);
+
+    for (int i = 0; i < 16; i++)
+    {
+        /* camera image */
+        std::stringstream simg;
+        simg << "../assets/dataset/image_" << i << ".jpg"; // squirrel
+        cv::Mat img = cv::imread(simg.str());
+
+        /* silhouette of squirrel */
+        cv::Mat silhouette;
+        cv::cvtColor(img, silhouette, cv::COLOR_BGR2HSV);
+        cv::inRange(silhouette, cv::Scalar(0, 0, 30), cv::Scalar(255, 255, 255), silhouette); // binary image -black 0; while =1
+
+        /* camera matrix of squirrel*/
+        std::stringstream smat;
+        smat << "viff" << std::setfill('0') << std::setw(3) << i << "_matrix";
+        cv::Mat P;
+        fs[smat.str()] >> P;
+
+        /* decompose proj matrix to cam- and rot matrix and trans vect */
+        cv::Mat K, R, t;
+        cv::decomposeProjectionMatrix(P, K, R, t);
+        K = cv::Mat::eye(3, 3, CV_32FC1);
+        // K.at<float>(0, 0) = 920.88464355; /* fx */
+        // K.at<float>(1, 1) = 924.34155273; /* fy */
+        // K.at<float>(0, 2) = 613.90703152; /* cx */
+        // K.at<float>(1, 2) = 389.5955547; /* cy */
+        K.at<float>(0, 0) = 1680.2631413061415; /* fx */
+        K.at<float>(1, 1) = 1676.1202869984309; /* fy */
+        K.at<float>(0, 2) = 621.59194200994375; /* cx */
+        K.at<float>(1, 2) = 467.7223229477861;  /* cy */
+        camera c;
+        c.Image = img;
+        c.P = P;
+        c.K = K;
+        c.R = R;
+        c.t = t;
+        c.Silhouette = silhouette;
+        // c.Silhouette = binarySilhouette;
+        cameras.push_back(c);
+    }
+
+    ///* bounding box dimensions of squirrel */
+    float xmin = -6.21639, ymin = -10.2796, zmin = -14.0349;
+    float xmax = 7.62138, ymax = 12.1731, zmax = 12.5358;
+    // bb of red block - coor (0.4, 0, 0.25) meter; w=l=3.1, height=2.4 cm
+    // float xmin = 40 - 1.55, ymin = 0 - 1.55, zmin = 25 - 1.2;
+    // float xmax = 40 + 1.55, ymax = 0 + 1.55, zmax = 25 + 1.2;
+    float bbwidth = std::abs(xmax - xmin) * 1.15;
+    float bbheight = std::abs(ymax - ymin) * 1.15;
+    float bbdepth = std::abs(zmax - zmin) * 1.05;
+
+    startParams params;
+    params.startX = xmin - std::abs(xmax - xmin) * 0.15;
+    params.startY = ymin - std::abs(ymax - ymin) * 0.15;
+    params.startZ = 0.0f;
+    params.voxelWidth = bbwidth / VOXEL_DIM;
+    params.voxelHeight = bbheight / VOXEL_DIM;
+    params.voxelDepth = bbdepth / VOXEL_DIM;
+
+    /* 3 dimensional voxel grid */
+    float *fArray = new float[VOXEL_SIZE];
+    std::fill_n(fArray, VOXEL_SIZE, 1000.0f);
+
+    /* carving model for every given camera image */
+    for (int i = 0; i < 16; i++)
+    {
+        carve(fArray, params, cameras.at(i));
+    }
+
+    // std::vector<cv::Mat> images;
+    // for (auto c : cameras)
+    // {
+    //     images.push_back(c.Image);
+    // }
+    // std::array<float, VOXEL_SIZE> voxels;
+    // std::vector<cv::Mat> occlusionBitmaps(images.size(), cv::Mat(IMG_HEIGHT, IMG_WIDTH, CV_8UC1, cv::Scalar(0)));
+    // double threshold = 0.1;
+    // voxelColoring(images, voxels, occlusionBitmaps, cameras, params, threshold);
+
+    /* show example of segmented image */
+    cv::Mat original, segmented;
+    cv::resize(cameras.at(1).Image, original, cv::Size(640, 480));
+    cv::resize(cameras.at(1).Silhouette, segmented, cv::Size(640, 480));
+    cv::imshow("Squirrel", original);
+    cv::imshow("Squirrel Silhouette", segmented);
+
+    renderModel(fArray, params);
+
+    return 0;
+}

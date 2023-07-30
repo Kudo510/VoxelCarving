@@ -1,454 +1,177 @@
-#include <iostream>
-#include <iomanip>
-#include <vector>
-#include <algorithm>
-#include <fstream>
-#include <sstream>
-#include <string>
+#include "common.h"
+#include "utils.h"
+#include "rendering.h"
+#include "voxel_carving.h"
+#include "voxel_colouring.h"
+#include <json/json.h>
+#include <cassert>
+#include <regex>
 
-
-
-#include <opencv2/core/core.hpp>
-#include <opencv2/highgui/highgui.hpp>
-#include <opencv2/calib3d/calib3d.hpp>
-#include <opencv2/imgproc/imgproc.hpp>
-#include <opencv2/opencv.hpp>
-
-#include <vtkSmartPointer.h>
-#include <vtkStructuredPoints.h>
-#include <vtkPointData.h>
-#include <vtkPLYWriter.h>
-#include <vtkFloatArray.h>
-#include <vtkRenderer.h>
-#include <vtkRenderWindow.h>
-#include <vtkRenderWindowInteractor.h>
-#include <vtkMarchingCubes.h>
-#include <vtkCleanPolyData.h>
-#include <vtkPolyDataMapper.h>
-#include <vtkActor.h>
-#include <vtkProperty.h>
-#include <vtkOBJExporter.h>
-
-const int IMG_WIDTH = 1280;
-const int IMG_HEIGHT = 960;
-const int VOXEL_DIM = 128;
-const int VOXEL_SIZE = VOXEL_DIM * VOXEL_DIM * VOXEL_DIM;
-const int VOXEL_SLICE = VOXEL_DIM * VOXEL_DIM;
-const int OUTSIDE = 0;
-
-struct voxel {
-    float xpos;
-    float ypos;
-    float zpos;
-    float res;
-    float value;
-};
-
-struct coord {
-    int x;
-    int y;
-};
-
-struct startParams {
-    float startX;
-    float startY;
-    float startZ;
-    float voxelWidth;
-    float voxelHeight;
-    float voxelDepth;
-};
-
-struct camera {
-    cv::Mat Image;
-    cv::Mat P;
-    cv::Mat K;
-    cv::Mat R;
-    cv::Mat t;
-    cv::Mat Silhouette;
-};
-
-void exportModel(char* filename, vtkPolyData* polyData) {
-
-    /* exports 3d model in ply format */
-    vtkSmartPointer<vtkPLYWriter> plyExporter = vtkSmartPointer<vtkPLYWriter>::New();
-    plyExporter->SetFileName(filename);
-    plyExporter->SetInputData(polyData);
-    plyExporter->Update();
-    plyExporter->Write();
-}
-
-
-coord project(camera cam, voxel v) {
-
-    coord im;
-
-    /* project voxel into camera image coords */
-    float z = cam.P.at<float>(2, 0) * v.xpos +
-        cam.P.at<float>(2, 1) * v.ypos +
-        cam.P.at<float>(2, 2) * v.zpos +
-        cam.P.at<float>(2, 3);
-
-    im.y = (cam.P.at<float>(1, 0) * v.xpos +
-        cam.P.at<float>(1, 1) * v.ypos +
-        cam.P.at<float>(1, 2) * v.zpos +
-        cam.P.at<float>(1, 3)) / z;
-
-    im.x = (cam.P.at<float>(0, 0) * v.xpos +
-        cam.P.at<float>(0, 1) * v.ypos +
-        cam.P.at<float>(0, 2) * v.zpos +
-        cam.P.at<float>(0, 3)) / z;
-
-    return im;
-}
-
-void renderModel(float fArray[], startParams params) {
-    /* Create vtk visualization pipeline from voxel grid (float array) */
-    vtkSmartPointer<vtkImageData> imageData = vtkSmartPointer<vtkImageData>::New();
-    imageData->SetDimensions(VOXEL_DIM, VOXEL_DIM, VOXEL_DIM);
-    imageData->SetSpacing(params.voxelDepth, params.voxelHeight, params.voxelWidth);
-    imageData->SetOrigin(params.startZ, params.startY, params.startX);
-
-    vtkSmartPointer<vtkFloatArray> scalarArray = vtkSmartPointer<vtkFloatArray>::New();
-    scalarArray->SetNumberOfComponents(1);
-    scalarArray->SetArray(fArray, VOXEL_SIZE, 1);
-
-    imageData->GetPointData()->SetScalars(scalarArray);
-
-    /* Create iso-surface with marching cubes algorithm */
-    vtkSmartPointer<vtkMarchingCubes> mcSource = vtkSmartPointer<vtkMarchingCubes>::New();
-    mcSource->SetInputData(imageData);
-    mcSource->ComputeNormalsOn();
-    mcSource->SetValue(0, 0.5); // isosurface value (0.5 for this example)
-
-    /* Recreate mesh topology and merge vertices */
-    vtkSmartPointer<vtkCleanPolyData> cleanPolyData = vtkSmartPointer<vtkCleanPolyData>::New();
-    cleanPolyData->SetInputConnection(mcSource->GetOutputPort());
-
-    /* Usual render stuff */
-    vtkSmartPointer<vtkRenderer> renderer = vtkSmartPointer<vtkRenderer>::New();
-    renderer->SetBackground(0.45, 0.45, 0.9);
-    renderer->SetBackground2(0.0, 0.0, 0.0);
-    renderer->GradientBackgroundOn();
-
-    vtkSmartPointer<vtkRenderWindow> renderWindow = vtkSmartPointer<vtkRenderWindow>::New();
-    renderWindow->AddRenderer(renderer);
-    vtkSmartPointer<vtkRenderWindowInteractor> interactor = vtkSmartPointer<vtkRenderWindowInteractor>::New();
-    interactor->SetRenderWindow(renderWindow);
-
-    vtkSmartPointer<vtkPolyDataMapper> mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
-    mapper->SetInputConnection(cleanPolyData->GetOutputPort());
-
-    vtkSmartPointer<vtkActor> actor = vtkSmartPointer<vtkActor>::New();
-    actor->SetMapper(mapper);
-
-    /* Visible light properties */
-    actor->GetProperty()->SetSpecular(0.15);
-    actor->GetProperty()->SetInterpolationToPhong();
-    renderer->AddActor(actor);
-
-    renderWindow->Render();
-    interactor->Start();
-    // Export the rendered model as an OBJ file
-    vtkSmartPointer<vtkOBJExporter> exporter = vtkSmartPointer<vtkOBJExporter>::New();
-    exporter->SetInput(renderWindow);
-    exporter->SetFilePrefix("F:\\second semseter\\3D Scanning & Motion Capture\\Final project\\Voxel-Carving\\");  // Specify the desired file path and prefix
-    exporter->Write();
-}
-
-
-void carve(float fArray[], startParams params, camera cam) {
-    cv::Mat silhouette, distImage;
-    cv::Canny(cam.Silhouette, silhouette, 0, 255);
-    cv::bitwise_not(silhouette, silhouette);
-    cv::distanceTransform(silhouette, distImage, cv::DIST_L2, 3);
-
-    for (int i = 0; i < VOXEL_DIM; i++) {
-        for (int j = 0; j < VOXEL_DIM; j++) {
-            for (int k = 0; k < VOXEL_DIM; k++) {
-
-                /* calc voxel position inside camera view frustum */
-                voxel v;
-                v.xpos = params.startX + i * params.voxelWidth;
-                v.ypos = params.startY + j * params.voxelHeight;
-                v.zpos = params.startZ + k * params.voxelDepth;
-                v.value = 1.0f;
-
-                coord im = project(cam, v);
-                float dist = -1.0f;
-
-                /* test if projected voxel is within image coords */
-                if (im.x > 0 && im.y > 0 && im.x < IMG_WIDTH && im.y < IMG_HEIGHT) {
-                    dist = distImage.at<float>(im.y, im.x);
-                    if (cam.Silhouette.at<uchar>(im.y, im.x) == OUTSIDE) {
-                        dist *= -1.0f;
-                    }
-                }
-
-                if (dist < fArray[i * VOXEL_SLICE + j * VOXEL_DIM + k]) {
-                    fArray[i * VOXEL_SLICE + j * VOXEL_DIM + k] = dist;
-                }
-
-            }
-        }
+int main(int argc, char *argv[])
+{
+    std::string config_path = "";
+    if (argc >= 2)
+    {
+        config_path = argv[1];
     }
-}
-
-cv::Mat getRowFromColumnB(const std::string& filename, int row) {
-    std::ifstream file(filename);
-    std::string line, value;
-
-    // Skip the rows until reaching the desired row
-    for (int i = 0; i < row; ++i) {
-        std::getline(file, line);
+    else
+    {
+        // No base path provided, handle the error
+        std::cerr << "Error: Config path not provided." << std::endl;
+        return 1; // Exit with a non-zero status code indicating an error
     }
 
-    // Read the desired row and extract value from column B
-    std::getline(file, line);
-    std::stringstream ss(line);
-    for (int i = 0; i < 1; ++i) {
-        std::getline(ss, value, ',');
-    }
+    // Read the JSON file
+    std::ifstream ifs(config_path);
+    assert(ifs);
+    Json::Value config;
+    ifs >> config;
+    ifs.close();
 
-    // Create a cv::Mat object from the value
-    cv::Mat rowMat(1, 1, CV_64F);
-    rowMat.at<double>(0, 0) = std::stod(value);
+    // Retrieve the values from the JSON
+    std::string obj_path = config["obj_path"].asString();
+    std::string matrices_path = config["matrices_path"].asString();
+    std::string image_folder = config["image_folder"].asString();
+    std::string silhouette_folder = config["silhouette_folder"].asString();
+    bool use_masks = config["use_masks"].asBool();
 
-    return rowMat;
-}
-cv::Mat extractRows(const cv::Mat& matrix, int numRows) {
-    cv::Rect roi(0, 0, matrix.cols, numRows);
-    cv::Mat extractedRows = matrix(roi).clone();
+    int voxel_dim = config["voxel_dim"].asInt();
+    int voxel_size = config["voxel_size"].asInt();
 
-    return extractedRows;
-}
-/*
-cv::Mat getCellValue(const std::string& filename, int row, int col) {
-    std::ifstream file(filename);
-    std::string line, value;
+    float start_x = config["start_x"].asFloat();
+    float start_y = config["start_y"].asFloat();
+    float start_z = config["start_z"].asFloat();
 
-    // Skip the rows until reaching the desired row
-    for (int i = 0; i < row; ++i) {
-        std::getline(file, line);
-    }
+    /* Intrinsics */
+    float fx = config["fx"].asFloat();
+    float fy = config["fy"].asFloat();
+    float cx = config["cx"].asFloat();
+    float cy = config["cy"].asFloat();
 
-    // Read the desired row and extract the value from the desired column
-    std::getline(file, line);
-    std::stringstream ss(line);
-    for (int i = 0; i < col; ++i) {
-        std::getline(ss, value, ',');
-    }
+    /* Voxel Grid */
+    float xmin = config["xmin"].asFloat();
+    float xmax = config["xmax"].asFloat();
+    float ymin = config["ymin"].asFloat();
+    float ymax = config["ymax"].asFloat();
+    float zmin = config["zmin"].asFloat();
+    float zmax = config["zmax"].asFloat();
 
-    // Create a cv::Mat object from the value
-    cv::Mat cellMat(1, 1, CV_64F);
-    cellMat.at<double>(0, 0) = std::stod(value);
+    std::vector<camera> cameras;
+    std::string extension = getFileExtension(matrices_path);
 
-    return cellMat;
-}*/
-
-cv::Mat getCellValue(const std::string& filename, int row) {
-    std::ifstream file(filename);
-    std::string line;
-
-    // Skip the rows until reaching the desired row
-    for (int i = 0; i < 20; ++i) {
-        std::getline(file, line);
-    }
-    std::cout << "Value in line" << line;
-
-    // Read the desired row and extract the value from the second column (column B)
-    std::getline(file, line);
-    std::stringstream ss(line);
-    std::string value;
-    std::getline(ss, value, '\t'); // Skip the first column (column A)
-    std::getline(ss, value, '\t'); // Read the value in the second column (column B)
-
-    // Remove any leading/trailing spaces or brackets from the value
-    value.erase(std::remove(value.begin(), value.end(), ' '), value.end());
-    value.erase(std::remove(value.begin(), value.end(), '['), value.end());
-    value.erase(std::remove(value.begin(), value.end(), ']'), value.end());
-
-    // Split the value into individual numbers
-    std::stringstream num_ss(value);
-    std::vector<double> nums;
-    double num;
-    while (num_ss >> num) {
-        nums.push_back(num);
-    }
-
-    // Create a cv::Mat object from the numbers
-    cv::Mat cellMat(1, nums.size(), CV_64F);
-    for (int i = 0; i < nums.size(); ++i) {
-        cellMat.at<double>(0, i) = nums[i];
-    }
-
-    return cellMat;
-}
-std::vector<double> stringToVector(const std::string& input) {
-    std::istringstream iss(input);
-    std::vector<double> result;
-    double number;
-
-    while (iss >> number) {
-        result.push_back(number);
-    }
-
-    return result;
-}
-
-std::string removeMiddleBracketsAndQuotes(const std::string& input) {
-    std::string result = input;
-
-    // Find the index of the middle opening bracket
-    size_t openingBracketIndex = result.find('[');
-    if (openingBracketIndex == std::string::npos)
-        return result; // No opening bracket found
-
-    // Find the index of the middle closing bracket, starting from the opening bracket index
-    size_t closingBracketIndex = result.find(']', openingBracketIndex);
-    if (closingBracketIndex == std::string::npos)
-        return result; // No closing bracket found
-
-    // Find the index of the first double quote after the opening bracket
-    size_t quoteIndex = result.find('"', openingBracketIndex);
-    if (quoteIndex == std::string::npos)
-        return result; // No double quote found
-
-    // Erase the middle opening bracket
-    result.erase(openingBracketIndex, 1);
-
-    // Erase the middle closing bracket, considering the offset caused by removing the opening bracket
-    result.erase(closingBracketIndex - 1, 1);
-
-    // Erase the first double quote
-    result.erase(quoteIndex, 1);
-
-    // Find the index of the next double quote after the previous one
-    quoteIndex = result.find('"', quoteIndex);
-    if (quoteIndex == std::string::npos)
-        return result; // No double quote found
-
-    // Erase the second double quote
-    result.erase(quoteIndex, 1);
-
-    return result;
-}
-
-std::vector<std::vector<double>> convertCSVtoMatrix(std::ifstream& file) {
-    std::string line;
-
-    // Skip the first row if it contains headers
-    std::getline(file, line);
-
-    std::vector<std::string> cells;
-
-    // Read the remaining lines and extract the second column cells
-    while (std::getline(file, line)) {
-        std::istringstream lineStream(line);
-        std::string cell;
-
-        // Skip the first column
-        std::getline(lineStream, cell, ',');
-
-        // Read the second column cell
-        std::getline(lineStream, cell, ',');
-        cells.push_back(cell);
-    }
-
-    for (std::string& str : cells) {
-        str.erase(std::remove_if(str.begin(), str.end(),
-            [&](char c) mutable { return c == '[' || c == ']' || c == '"'; }),
-            str.end());
-    }
-
-    std::vector<std::vector<double>> lines(cells.size());
-
-    for (int i = 0; i < cells.size(); i++) {
-        lines[i] = stringToVector(cells[i]);
-    }
-
-    return lines;
-}
-std::vector<cv::Mat> groupVectorsToMatrices(const std::vector<std::vector<double>>& lines) {
+    cv::FileStorage viff_fs;
     std::vector<cv::Mat> matrices;
 
-    for (int i = 0; i < lines.size(); i += 4) {
-        cv::Mat matrix(4, lines[i].size(), CV_64F);
+    if (extension == "xml")
+    {
+        // viff file and squirrel dataset
+        viff_fs = cv::FileStorage(matrices_path, cv::FileStorage::READ);
+    }
+    else
+    {
+        matrices = readMatricesFromFile(matrices_path);
+    }
 
-        // Populate the matrix with data from the vectors
-        for (int j = 0; j < 4; j++) {
-            for (int k = 0; k < lines[i + j].size(); k++) {
-                matrix.at<double>(j, k) = lines[i + j][k];
+    std::string img_ext = use_masks ? ".png" : ".jpg";
+    auto files = use_masks ? std::filesystem::directory_iterator(silhouette_folder) : std::filesystem::directory_iterator(image_folder);
+    std::map<int, std::filesystem::directory_entry> image_paths;
+    // Extract and print the indices from the sorted directory entries
+    std::regex numericRegex;
+    if (img_ext == ".png")
+    {
+        numericRegex = R"(image[_-](\d+)\.png)";
+    }
+    else
+    {
+        numericRegex = R"(image[_-](\d+)\.jpg)";
+    }
+
+    for (const auto &file : files)
+    {
+        if (file.is_regular_file() && file.path().extension() == img_ext)
+        {
+            std::string fileName = file.path().filename().string();
+            // Extract the index using regex
+            std::smatch match;
+            if (std::regex_search(fileName, match, numericRegex) && match.size() > 1)
+            {
+                int index = std::stoi(match[1]);
+                image_paths[index - 1] = file;
             }
         }
+    }
+    std::cout << "Found " << image_paths.size() << " images\n";
 
-        matrices.push_back(matrix);
+    // Get the size and index the elements
+    for (int i = 0; i < image_paths.size(); i++)
+    {
+        auto entry = image_paths[i];
+        if (entry.is_regular_file() && entry.path().extension() == img_ext)
+        {
+            std::cout << "Processing Image: " << entry.path() << std::endl;
+
+            cv::Mat img = cv::imread(entry.path());
+
+            cv::Mat silhouette;
+            if (!use_masks)
+            {
+                cv::cvtColor(img, silhouette, cv::COLOR_BGR2HSV);
+                cv::inRange(silhouette, cv::Scalar(0, 0, 30), cv::Scalar(255, 255, 255), silhouette); // binary image -black 0; while =1
+                std::string silhouette_path = replaceSubstring(entry.path(), "original_images", "segmented_images");
+                silhouette_path = replaceSubstring(silhouette_path, ".jpg", ".png");
+                if (!fileExists(silhouette_path))
+                {
+                    cv::imwrite(silhouette_path, silhouette);
+                }
+            }
+            else
+            {
+                cv::cvtColor(img, silhouette, cv::COLOR_BGR2GRAY);
+            }
+
+            cv::Mat P;
+            cv::Mat K, R, t;
+
+            K = cv::Mat::eye(3, 3, CV_32FC1);
+            K.at<float>(0, 0) = fx;
+            K.at<float>(1, 1) = fy;
+            K.at<float>(0, 2) = cx;
+            K.at<float>(1, 2) = cy;
+
+            if (extension == "xml")
+            {
+                std::stringstream smat;
+                smat << "viff" << std::setfill('0') << std::setw(3) << i << "_matrix";
+                viff_fs[smat.str()] >> P;
+                cv::decomposeProjectionMatrix(P, K, R, t);
+                // DecomposeProjectionMatrix instrinsics need to be overwritten?
+                // K.at<float>(0, 0) = fx;
+                // K.at<float>(1, 1) = fy;
+                // K.at<float>(0, 2) = cx;
+                // K.at<float>(1, 2) = cy;
+            }
+            else
+            {
+                const cv::Mat &secondMatrix = matrices[i]; // Get the second matrix
+                cv::Mat T(3, 4, CV_64F);
+                T = secondMatrix(cv::Rect(0, 0, 4, 3)); // only take the first 3 row
+
+                cv::gemm(K, T, 1.0, cv::Mat(), 0.0, P);
+            }
+
+            camera c;
+            c.Image = img;
+            c.P = P;
+            c.K = K;
+            c.R = R;
+            c.t = t;
+            std::cout << P << std::endl << std::endl;
+            c.Silhouette = silhouette;
+            cameras.push_back(c);
+        }
     }
 
-    return matrices;
-}
-int main(int argc, char* argv[]) {
-
-    /* acquire camera images, silhouettes and camera matrix */
-    std::vector<camera> cameras;
-    // cv::FileStorage fs("F:\\second semseter\\3D Scanning & Motion Capture\\Final project\\Voxel-Carving\\assets\\viff.xml", cv::FileStorage::READ);
-    //std::string filepath = "F:\\second semseter\\3D Scanning & Motion Capture\\Final project\\VoxelCarvingWithRoboticArm\\data\\red_block.csv"; // Replace with the actual file path
-    //
-    //int targetRow = 1;
-    //int targetCol = 3;
-
-    //cv::Mat cellValue = getCellValue(filepath, targetRow);
-    //std::cout << "Value in block B2 (cv::Mat):\n" << cellValue << std::endl;
-
-    std::ifstream file("F:\\second semseter\\3D Scanning & Motion Capture\\Final project\\Voxel-Carving\\assets\\around_X.csv");
-    std::vector<std::vector<double>> lines = convertCSVtoMatrix(file);
-    std::vector<cv::Mat> matrices = groupVectorsToMatrices(lines);
-
-
-    for (int i = 0; i < 16; i++) {
-
-        /* camera image */
-        std::stringstream simg;
-        simg << "F:\\second semseter\\3D Scanning & Motion Capture\\Final project\\Voxel-Carving\\assets\\image" << i+1;
-        //simg << "F:\\second semseter\\3D Scanning & Motion Capture\\Final project\\Voxel-Carving\\assets\\image_" << i << ".jpg";
-        cv::Mat img = cv::imread(simg.str());
-
-        /* silhouette */
-        cv::Mat silhouette;
-        cv::cvtColor(img, silhouette, cv::COLOR_BGR2HSV);
-        cv::inRange(silhouette, cv::Scalar(0, 0, 30), cv::Scalar(255, 255, 255), silhouette);
-        //std::cout << "Silhouette" << silhouette.rows << silhouette.cols;
-        /* camera matrix */
-        const cv::Mat& secondMatrix = matrices[i]; // Get the second matrix
-        cv::Mat P = secondMatrix(cv::Rect(0, 0, 4, 3)); //only take the first 3 row
-        //std::cout << "Image shape: " << P.rows << " rows x " << P.cols << " columns" << std::endl;
-
-        /* decompose proj matrix to cam- and rot matrix and trans vect */
-        cv::Mat K, R, t;
-        cv::decomposeProjectionMatrix(P, K, R, t);
-        K = cv::Mat::eye(3, 3, CV_32FC1);
-        //K.at<float>(0, 0) = 920.88464355; /* fx */
-        //K.at<float>(1, 1) = 924.34155273; /* fy */
-        //K.at<float>(0, 2) = 613.90703152; /* cx */
-        //K.at<float>(1, 2) = 389.5955547; /* cy */
-        K.at<float>(0, 0) = 1680.2631413061415; /* fx */
-        K.at<float>(1, 1) = 1676.1202869984309; /* fy */
-        K.at<float>(0, 2) = 621.59194200994375; /* cx */
-        K.at<float>(1, 2) = 467.7223229477861; /* cy */
-        camera c;
-        c.Image = img;
-        c.P = P;
-        c.K = K;
-        c.R = R;
-        c.t = t;
-        c.Silhouette = silhouette;
-
-        cameras.push_back(c);
-    }
-
-    /* bounding box dimensions of squirrel */
-    float xmin = -6.21639, ymin = -10.2796, zmin = -14.0349;
-    float xmax = 7.62138, ymax = 12.1731, zmax = 12.5358;
-
+    // Bounding Box for object
     float bbwidth = std::abs(xmax - xmin) * 1.15;
     float bbheight = std::abs(ymax - ymin) * 1.15;
     float bbdepth = std::abs(zmax - zmin) * 1.05;
@@ -462,22 +185,27 @@ int main(int argc, char* argv[]) {
     params.voxelDepth = bbdepth / VOXEL_DIM;
 
     /* 3 dimensional voxel grid */
-    float* fArray = new float[VOXEL_SIZE];
+    float *fArray = new float[VOXEL_SIZE];
     std::fill_n(fArray, VOXEL_SIZE, 1000.0f);
 
+    std::cout << "Carving Voxel Grid now...\n";
     /* carving model for every given camera image */
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < image_paths.size(); i++)
+    {
         carve(fArray, params, cameras.at(i));
     }
+    std::cout << "Voxel Carving Complete \n";
+
+    /** TODO: Voxel Colouring **/
 
     /* show example of segmented image */
     cv::Mat original, segmented;
-    cv::resize(cameras.at(1).Image, original, cv::Size(640, 480));
-    cv::resize(cameras.at(1).Silhouette, segmented, cv::Size(640, 480));
-    cv::imshow("Squirrel", original);
-    cv::imshow("Squirrel Silhouette", segmented);
+    cv::resize(cameras.at(0).Image, original, cv::Size(640, 480));
+    cv::resize(cameras.at(0).Silhouette, segmented, cv::Size(640, 480));
+    cv::imshow("Sample Image", original);
+    cv::imshow("Sample Silhouette", segmented);
 
-    renderModel(fArray, params);
+    renderModel(fArray, params, obj_path);
 
     return 0;
 }

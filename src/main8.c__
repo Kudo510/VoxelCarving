@@ -1,0 +1,150 @@
+#include "common.h"
+#include "utils.h"
+#include "rendering.h"
+#include "voxel_carving.h"
+#include "voxel_colouring.h"
+
+int main(int argc, char *argv[])
+{
+
+    /* acquire camera images, silhouettes and camera matrix of squirrel*/
+    std::vector<camera> cameras;
+
+    // cv::FileStorage fs("F:\\second semseter\\3D Scanning & Motion Capture\\Final project\\Voxel-Carving\\assets\\viff.xml", cv::FileStorage::READ);
+    // std::string filepath = "F:\\second semseter\\3D Scanning & Motion Capture\\Final project\\VoxelCarvingWithRoboticArm\\data\\red_block.csv"; // Replace with the actual file path
+    //
+    // int targetRow = 1;
+    // int targetCol = 3;
+
+    // cv::Mat cellValue = getCellValue(filepath, targetRow);
+    // std::cout << "Value in block B2 (cv::Mat):\n" << cellValue << std::endl;
+
+    // our project - get matrices from csv file
+    // std::ifstream file("F:\\second semseter\\3D Scanning & Motion Capture\\Final project\\Voxel-Carving\\assets\\around_X.csv");
+    // std::vector<std::vector<double>> lines = convertCSVtoMatrix(file);
+    // std::vector<cv::Mat> matrices = groupVectorsToMatrices(lines);
+    std::string file_path = "F:\\second semseter\\3D Scanning & Motion Capture\\Final project\\Voxel-Carving\\assets\\red_block_correct_pose.txt"; // Replace with the actual path to your text file
+    // Replace with the actual path to your text file
+
+    std::vector<cv::Mat> matrices = readMatricesFromFile(file_path);
+    // print the matrices
+    // for (const auto& matrix : matrices)
+    //{
+    //    std::cout << "Matrix:\n" << matrix << std::endl;
+    //    std::cout << "Matrix shape: " << matrix.rows << "x" << matrix.cols << std::endl;
+    //    std::cout << "First value: " << matrix.at<float>(0, 0) << std::endl;
+    //    //cv::waitKey(0); // Wait for a key press to show the next matrix
+    //}
+
+    for (int i = 0; i < 16; i++)
+    {
+
+        /* camera image */
+        std::stringstream simg;
+        simg << "F:\\second semseter\\3D Scanning & Motion Capture\\Final project\\Voxel-Carving\\assets\\image" << i + 1;
+        // simg << "F:\\second semseter\\3D Scanning & Motion Capture\\Final project\\Voxel-Carving\\assets\\image_" << i << ".jpg";  //squirrel
+        cv::Mat img = cv::imread(simg.str());
+
+        /* silhouette of our */
+        std::stringstream b_silhouette;
+        b_silhouette << "F:\\second semseter\\3D Scanning & Motion Capture\\Final project\\Voxel-Carving\\assets\\image" << i + 1 << ".png";
+        cv::Mat silhouette = cv::imread(b_silhouette.str());
+        cv::Mat binarySilhouette;
+        cv::cvtColor(silhouette, binarySilhouette, cv::COLOR_BGR2GRAY); // Convert to grayscale // Apply thresholding  -need to change here our gaonl is to do the same as the template- siluhette need to be a black and white
+
+        /* camera matrix of our project */
+        const cv::Mat &secondMatrix = matrices[i];      // Get the second matrix
+        cv::Mat P = secondMatrix(cv::Rect(0, 0, 4, 3)); // only take the first 3 row
+        /* std::cout << "Image shape: " << P.rows << " rows x " << P.cols << " columns" << std::endl;*/
+
+        /* camera matrix of squirrel*/
+        // std::stringstream smat;
+        // smat << "viff" << std::setfill('0') << std::setw(3) << i << "_matrix";
+        // cv::Mat P;
+        // fs[smat.str()] >> P;
+
+        /* decompose proj matrix to cam- and rot matrix and trans vect */
+        // cv::Mat K, R, t;
+        // cv::decomposeProjectionMatrix(P, K, R, t);
+        // R = P(cv::Rect(0, 0, 3, 3)); // Slicing the first three columns of T as R
+        // t = P.col(3); // Extracting the last column of T as t
+        ////t.at<float>(3, 0) = 0;
+
+        cv::Mat K;
+
+        K = cv::Mat::eye(3, 3, CV_32FC1);
+        K.at<float>(0, 0) = 920.88464355; /* fx */
+        K.at<float>(1, 1) = 924.34155273; /* fy */
+        K.at<float>(0, 2) = 613.90703152; /* cx */
+        K.at<float>(1, 2) = 389.5955547;  /* cy */
+        // K.at<float>(0, 0) = 0.92088464355; /* fx */
+        // K.at<float>(1, 1) = 0.92434155273; /* fy */
+        // K.at<float>(0, 2) = 0.61390703152; /* cx */
+        // K.at<float>(1, 2) = 0.3895955547; /* cy */
+        // std::cout << "K" << K << std::endl;
+
+        cv::Mat real_P(3, 4, CV_64F);
+        // Compose P from K, R, and t
+        // K.copyTo(real_P(cv::Rect(0, 0, 3, 3))); // Copy K to the top-left 3x3 block of P
+        // R.copyTo(real_P(cv::Rect(0, 0, 3, 3))); // Copy R to the top-left 3x3 block of P
+        // t.copyTo(real_P(cv::Rect(3, 0, 1, 3))); // Copy t to the rightmost column of P
+
+        cv::gemm(K, P, 1.0, cv::Mat(), 0.0, real_P);
+        // std::cout << "P" << real_P << std::endl;
+        // K.at<float>(0, 0) = 1680.2631413061415; /* fx */
+        // K.at<float>(1, 1) = 1676.1202869984309; /* fy */
+        // K.at<float>(0, 2) = 621.59194200994375; /* cx */
+        // K.at<float>(1, 2) = 467.7223229477861; /* cy */
+        camera c;
+        c.Image = img;
+        c.P = real_P;
+        // c.K = K;
+        // c.R = R;
+        // c.t = t;
+        //  c.Silhouette = silhouette;
+        c.Silhouette = binarySilhouette;
+        cameras.push_back(c);
+    }
+
+    ///* bounding box dimensions of squirrel */
+    // float xmin = -6.21639, ymin = -10.2796, zmin = -14.0349;
+    // float xmax = 7.62138, ymax = 12.1731, zmax = 12.5358;
+    //  bb of red block - coor (0.4, 0, 0.25) meter; w=l=3.1, height=2.4 cm
+    //  float xmin = 40 - 1.55, ymin = 0 - 1.55, zmin = 25 - 1.2;
+    //  float xmax = 40 + 1.55, ymax = 0 + 1.55, zmax = 25 + 1.2;
+
+    float xmin = -50, ymin = -50, zmin = -50;
+    float xmax = 50, ymax = 50, zmax = 50;
+    float bbwidth = std::abs(xmax - xmin) * 1.15;
+    float bbheight = std::abs(ymax - ymin) * 1.15;
+    float bbdepth = std::abs(zmax - zmin) * 1.05;
+
+    startParams params;
+    params.startX = xmin - std::abs(xmax - xmin) * 0.15;
+    params.startY = ymin - std::abs(ymax - ymin) * 0.15;
+    params.startZ = 0.0f;
+    params.voxelWidth = bbwidth / VOXEL_DIM;
+    params.voxelHeight = bbheight / VOXEL_DIM;
+    params.voxelDepth = bbdepth / VOXEL_DIM;
+
+    /* 3 dimensional voxel grid */
+    float *fArray = new float[VOXEL_SIZE];
+    std::fill_n(fArray, VOXEL_SIZE, 1000.0f);
+
+    /* carving model for every given camera image */
+    for (int i = 0; i < 16; i++)
+    {
+        carve(fArray, params, cameras.at(i));
+    }
+
+    /* show example of segmented image */
+    cv::Mat original, segmented;
+    cv::resize(cameras.at(1).Image, original, cv::Size(1280, 720));
+    cv::resize(cameras.at(1).Silhouette, segmented, cv::Size(1280, 720));
+    cv::imshow("Squirrel", original);
+    cv::imshow("Squirrel Silhouette", segmented);
+
+    renderModel(fArray, params);
+
+    return 0;
+}

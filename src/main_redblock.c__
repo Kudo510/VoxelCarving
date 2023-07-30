@@ -1,0 +1,110 @@
+#include "common.h"
+#include "utils.h"
+#include "rendering.h"
+#include "voxel_carving.h"
+#include "voxel_colouring.h"
+
+int main(int argc, char *argv[])
+{
+    /* acquire camera images, silhouettes and camera matrix of squirrel*/
+    std::vector<camera> cameras;
+    std::string file_path = "../assets/red_block_dataset/red_block_correct_pose.txt"; // Replace with the actual path to your text file
+    // std::string file_path = "../assets/red_block_dataset/new_poses.txt"; // Replace with the actual path to your text file
+    // Replace with the actual path to your text file
+    std::vector<cv::Mat> matrices = readMatricesFromFile(file_path);
+
+    for (int i = 0; i < 16; i++)
+    {
+        /* camera image */
+        std::stringstream simg;
+        simg << "../assets/red_block_dataset/image" << i + 1;
+        cv::Mat img = cv::imread(simg.str());
+
+        /* silhouette of our */
+        std::stringstream b_silhouette;
+        b_silhouette << "../assets/red_block_dataset/image" << i + 1 << ".png";
+        cv::Mat silhouette = cv::imread(b_silhouette.str());
+        cv::Mat binarySilhouette;
+        cv::cvtColor(silhouette, binarySilhouette, cv::COLOR_BGR2GRAY); // Convert to grayscale // Apply thresholding  -need to change here our gaonl is to do the same as the template- siluhette need to be a black and white
+
+        /* camera matrix of our project */
+        const cv::Mat &secondMatrix = matrices[i];      // Get the second matrix
+        cv::Mat P = secondMatrix(cv::Rect(0, 0, 4, 3)); // only take the first 3 row
+
+        /* decompose proj matrix to cam- and rot matrix and trans vect */
+        // cv::Mat K, R, t;
+        // cv::decomposeProjectionMatrix(P, K, R, t);
+
+        cv::Mat R = P(cv::Rect(0, 0, 3, 3)).clone(); // Extract rotation matrix (3x3 top left)
+
+        cv::Mat t = P(cv::Rect(3, 0, 1, 3)).clone(); // Extract translation vector (3x1 top right)
+
+        cv::Mat K = cv::Mat::eye(3, 3, CV_32FC1);
+        K.at<float>(0, 0) = 920.88464355; /* fx */
+        K.at<float>(1, 1) = 924.34155273; /* fy */
+        K.at<float>(0, 2) = 613.90703152; /* cx */
+        K.at<float>(1, 2) = 389.5955547;  /* cy */
+
+        // K.at<float>(0, 0) = 1680.2631413061415; /* fx */
+        // K.at<float>(1, 1) = 1676.1202869984309; /* fy */
+        // K.at<float>(0, 2) = 621.59194200994375; /* cx */
+        // K.at<float>(1, 2) = 467.7223229477861; /* cy */
+        camera c;
+        c.Image = img;
+        c.P = P;
+        c.K = K;
+        c.R = R;
+        c.t = t;
+        // c.Silhouette = silhouette;
+        c.Silhouette = binarySilhouette;
+        cameras.push_back(c);
+    }
+
+    ///* bounding box dimensions of squirrel */
+    // float xmin = -6.21639, ymin = -10.2796, zmin = -14.0349;
+    // float xmax = 7.62138, ymax = 12.1731, zmax = 12.5358;
+    //  bb of red block - coor (0.48, 0, 0.2) meter; w=l=3.1, height=2.4 cm
+    float width_length_offset = 0.155;
+    float height_offset = 0.12;
+    float center_x = 0.4;
+    float center_y = 0.0;
+    float center_z = 0.2;
+
+    float xmin = center_x - width_length_offset;
+    float ymin = center_y - width_length_offset;
+    float zmin = center_z - height_offset;
+
+    float xmax = center_x + width_length_offset, ymax = center_y + width_length_offset, zmax = center_z + height_offset;
+    float bbwidth = std::abs(xmax - xmin) * 1.15;
+    float bbheight = std::abs(ymax - ymin) * 1.15;
+    float bbdepth = std::abs(zmax - zmin) * 1.05;
+
+    startParams params;
+    params.startX = xmin - std::abs(xmax - xmin) * 0.15;
+    params.startY = ymin - std::abs(ymax - ymin) * 0.15;
+    params.startZ = 0.0f;
+    params.voxelWidth = bbwidth / VOXEL_DIM;
+    params.voxelHeight = bbheight / VOXEL_DIM;
+    params.voxelDepth = bbdepth / VOXEL_DIM;
+
+    /* 3 dimensional voxel grid */
+    float *fArray = new float[VOXEL_SIZE];
+    std::fill_n(fArray, VOXEL_SIZE, 1000.0f);
+
+    /* carving model for every given camera image */
+    for (int i = 0; i < 16; i++)
+    {
+        carve(fArray, params, cameras.at(i));
+    }
+
+    /* show example of segmented image */
+    cv::Mat original, segmented;
+    cv::resize(cameras.at(1).Image, original, cv::Size(1280, 720));
+    cv::resize(cameras.at(1).Silhouette, segmented, cv::Size(1280, 720));
+    cv::imshow("Squirrel", original);
+    cv::imshow("Squirrel Silhouette", segmented);
+
+    renderModel(fArray, params);
+
+    return 0;
+}

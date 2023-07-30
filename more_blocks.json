@@ -1,0 +1,17 @@
+{
+	"obj_path": "../assets/red_block_more_images/",
+	"matrices_path": "../assets/red_block_more_images/poses.txt",
+	"image_folder": "../assets/red_block_more_images/original_images/",
+	"silhouette_folder": "../assets/red_block_more_images/segmented_images/",
+	"use_masks": true,
+	"fx": 920.88464355,
+	"fy": 924.34155273,
+	"cx": 613.90703152,
+	"cy": 389.5955547,
+	"xmin": -50,
+	"xmax": 50,
+	"ymin": -50,
+	"ymax": 50,
+	"zmin": -50,
+	"zmax": 50
+}
