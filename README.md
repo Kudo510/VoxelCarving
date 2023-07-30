@@ -83,3 +83,12 @@ make -j$(nproc)
 ./VoxelCarving ../red_block.json
 
 ```
+
+### Result
+
+
+https://github.com/Kudo510/VoxelCarving/assets/68633914/ab455a0b-42e3-4244-b9bd-26bd41ee582c
+
+
+
+
