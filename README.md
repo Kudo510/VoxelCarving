@@ -83,7 +83,6 @@ make -j$(nproc)
 ./VoxelCarving ../red_block.json
 
 ```
-
 ### Result
 
 
