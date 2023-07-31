@@ -33,7 +33,32 @@
 #include <vtkActor.h>
 #include <vtkProperty.h>
 #include <vtkOBJExporter.h>
+
+#include <vtkSmartPointer.h>
+#include <vtkActor.h>
+#include <vtkRenderWindow.h>
+#include <vtkRenderer.h>
+#include <vtkRenderWindowInteractor.h>
+#include <vtkSmartVolumeMapper.h>
+#include <vtkColorTransferFunction.h>
+#include <vtkVolumeProperty.h>
+#include <vtkSampleFunction.h>
+#include <vtkPiecewiseFunction.h>
+#include <vtkImageData.h>
+#include <stdlib.h>
+#include <numeric> // std::iota
 // #include <boost/filesystem.hpp>
+
+#include <vtkSmartPointer.h>
+#include <vtkImageData.h>
+#include <vtkPoints.h>
+#include <vtkUnsignedCharArray.h>
+#include <vtkPointData.h>
+#include <vtkDataSetMapper.h>
+#include <vtkActor.h>
+#include <vtkRenderer.h>
+#include <vtkRenderWindow.h>
+#include <vtkRenderWindowInteractor.h>
 
 const int IMG_WIDTH = 1280;
 const int IMG_HEIGHT = 720;
@@ -49,6 +74,11 @@ struct voxel
     float zpos;
     float res;
     float value;
+
+    // Colour
+    float red = -1;
+    float green = -1;
+    float blue = -1;
 };
 
 struct coord
@@ -75,6 +105,7 @@ struct camera
     cv::Mat R;
     cv::Mat t;
     cv::Mat Silhouette;
+    std::string image_name;
 };
 
 coord project(camera cam, voxel v)

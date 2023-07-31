@@ -1,80 +1,129 @@
 // /*** UMAIR: **/
+#include "common.h"
+#include <random>
+#include <GL/glut.h> // Make sure to include the appropriate OpenGL headers
 
-// void calculateColorStats(cv::Mat &image, std::vector<coord> &pixels, cv::Mat &colorMean, cv::Mat &colorStandardDeviation)
-// {
-//     cv::Mat pixelColors(pixels.size(), 1, CV_8UC3);
+#include <vtkSmartPointer.h>
+#include <vtkPoints.h>
+#include <vtkCellArray.h>
+#include <vtkUnsignedCharArray.h>
+#include <vtkPolyData.h>
+#include <vtkPolyDataMapper.h>
+#include <vtkActor.h>
+#include <vtkRenderer.h>
+#include <vtkRenderWindow.h>
+#include <vtkRenderWindowInteractor.h>
+#include <vtkFloatArray.h>
+#include <vtkPointData.h>
+#include <vtkUnstructuredGrid.h>
+#include <vtkGlyph3D.h>
+#include <vtkSphereSource.h>
+#include <vtkNamedColors.h>
+#include <vtkPolyDataMapper.h>
 
-//     for (size_t i = 0; i < pixels.size(); i++)
-//     {
-//         cv::Vec3b pixelColor = image.at<cv::Vec3b>(pixels[i].y, pixels[i].x);
-//         pixelColors.at<cv::Vec3b>(i, 0) = pixelColor;
-//     }
+void colourVoxels(std::vector<camera> &cameras, std::vector<voxel> &voxels)
+{
+    for (auto &voxel : voxels)
+    {
+        float runningSumR = 0.0;
+        float runningSumG = 0.0;
+        float runningSumB = 0.0;
+        int numContributingCameras = 0;
 
-//     cv::Scalar sum;
-//     cv::accumulate(pixelColors, sum);
+        for (auto &camera : cameras)
+        {
+            cv::Mat voxel_coord(4, 1, CV_32F);
+            voxel_coord.at<float>(0) = voxel.xpos;
+            voxel_coord.at<float>(1) = voxel.ypos;
+            voxel_coord.at<float>(2) = voxel.zpos;
+            voxel_coord.at<float>(3) = 1.0f;
 
-//     cv::Scalar mean;
-//     cv::meanStdDev(pixelColors, colorMean, colorStandardDeviation);
-// }
+            cv::Mat pixel_coord;
+            cv::gemm(camera.P, voxel_coord, 1.0, cv::Mat(), 0.0, pixel_coord);
+            // cv::Mat pixel_coord = cam.P * voxel_coord;
 
-// void voxelColoring(std::vector<cv::Mat> &images, std::array<float, VOXEL_SIZE> &voxels, std::vector<cv::Mat> &occlusionBitmaps, std::vector<camera> &cameras, std::vector<startParams> &params, double threshold)
-// {
-//     for (const auto &image : images)
-//     {
-//         occlusionBitmaps.push_back(cv::Mat(IMG_HEIGHT, IMG_WIDTH, CV_8UC1, cv::Scalar(0)));
-//     }
+            coord im;
+            im.x = pixel_coord.at<float>(0) / pixel_coord.at<float>(2);
+            im.y = pixel_coord.at<float>(1) / pixel_coord.at<float>(2);
 
-//     for (int layer = 0; layer < VOXEL_DIM; layer++)
-//     {
-//         for (int i = layer * VOXEL_SLICE; i < (layer + 1) * VOXEL_SLICE; i++)
-//         {
-//             int voxelIndex = layer * VOXEL_SLICE + i;
+            if (im.x >= 0 && im.x < IMG_WIDTH &&
+                im.y >= 0 && im.y < IMG_HEIGHT &&
+                camera.Silhouette.at<uchar>(im.y, im.x) != 0 && voxel.value <= 0)
+            {
+                cv::Vec3b pixelColor = camera.Image.at<cv::Vec3b>(im.y, im.x);
+                runningSumB += pixelColor[0];
+                runningSumG += pixelColor[1];
+                runningSumR += pixelColor[2];
+                numContributingCameras++;
+            }
+        }
 
-//             voxel &V = voxels[voxelIndex];
+        if (numContributingCameras > 0)
+        {
+            voxel.red = runningSumR / numContributingCameras;
+            voxel.green = runningSumG / numContributingCameras;
+            voxel.blue = runningSumB / numContributingCameras;
+            // std::cout << "Voxel (" << voxel.xpos << ", " << voxel.ypos << ", " << voxel.zpos << ") has colour " << voxel.red << " " << voxel.green << " " << voxel.blue << "\n";
+        }
+    }
+}
 
-//             for (int j = 0; j < images.size(); j++)
-//             {
-//                 camera &cam = cameras[j];
-//                 startParams &param = params[j];
+// Function to render the colored voxel object using VTK
+void renderColoredVoxels(std::vector<voxel> &voxels)
+{
+    vtkSmartPointer<vtkNamedColors> colors = vtkSmartPointer<vtkNamedColors>::New();
 
-//                 std::vector<coord> pixels;
+    // Create VTK objects
+    vtkSmartPointer<vtkPoints> points = vtkSmartPointer<vtkPoints>::New();
+    vtkSmartPointer<vtkUnsignedCharArray> colorsArray = vtkSmartPointer<vtkUnsignedCharArray>::New();
+    colorsArray->SetNumberOfComponents(3);
+    vtkSmartPointer<vtkCellArray> voxelsCells = vtkSmartPointer<vtkCellArray>::New();
+    vtkSmartPointer<vtkPolyData> polyData = vtkSmartPointer<vtkPolyData>::New();
 
-//                 // Find the set P(i) of pixels
-//                 coord im = projectVoxel(cam, V);
+    // Populate points and colors arrays
+    for (auto &voxel : voxels)
+    {
+        points->InsertNextPoint(voxel.xpos, voxel.ypos, voxel.zpos);
+        unsigned char color[3] = {static_cast<unsigned char>(voxel.red),
+                                  static_cast<unsigned char>(voxel.green),
+                                  static_cast<unsigned char>(voxel.blue)};
+        colorsArray->InsertNextTypedTuple(color);
+    }
 
-//                 // Determine the pixels in P(i)
-//                 int xStart = std::max(0, static_cast<int>(im.x - param.startX) / param.voxelWidth);
-//                 int yStart = std::max(0, static_cast<int>(im.y - param.startY) / param.voxelHeight);
-//                 int xEnd = std::min(IMG_WIDTH - 1, static_cast<int>(im.x - param.startX + param.voxelWidth) / param.voxelWidth);
-//                 int yEnd = std::min(IMG_HEIGHT - 1, static_cast<int>(im.y - param.startY + param.voxelHeight) / param.voxelHeight);
+    // Populate voxel cells
+    for (vtkIdType i = 0; i < voxels.size(); ++i)
+    {
+        vtkIdType voxelIndices[1] = {i};
+        voxelsCells->InsertNextCell(1, voxelIndices);
+    }
 
-//                 for (int x = xStart; x <= xEnd; x++)
-//                 {
-//                     for (int y = yStart; y <= yEnd; y++)
-//                     {
-//                         pixels.push_back(coord{x, y});
-//                     }
-//                 }
+    // Connect the points and colors to the polyData
+    polyData->SetPoints(points);
+    polyData->GetPointData()->SetScalars(colorsArray);
+    polyData->SetVerts(voxelsCells);
 
-//                 cv::Scalar colorMean;
-//                 double colorStandardDeviation;
-//                 calculateColorStats(cam.Image, pixels, colorMean, colorStandardDeviation);
+    // Create a mapper
+    vtkSmartPointer<vtkPolyDataMapper> mapper = vtkSmartPointer<vtkPolyDataMapper>::New();
+    mapper->SetInputData(polyData);
 
-//                 if (colorStandardDeviation < threshold)
-//                 {
-//                     voxels[voxelIndex] = colorMean[0];
-//                     for (int j = 0; j < images.size(); j++)
-//                     {
-//                         occlusionBitmaps[j].setTo(255, cam.Silhouette);
-//                     }
-//                 }
-//                 else
-//                 {
-//                     voxels[voxelIndex] = OUTSIDE;
-//                 }
-//             }
-//         }
-//     }
-// }
+    // Create an actor
+    vtkSmartPointer<vtkActor> actor = vtkSmartPointer<vtkActor>::New();
+    actor->SetMapper(mapper);
 
-// /*********/
+    // Create a renderer and add the actor
+    vtkSmartPointer<vtkRenderer> renderer = vtkSmartPointer<vtkRenderer>::New();
+    renderer->AddActor(actor);
+    renderer->SetBackground(colors->GetColor3d("White").GetData());
+
+    // Create a render window
+    vtkSmartPointer<vtkRenderWindow> renderWindow = vtkSmartPointer<vtkRenderWindow>::New();
+    renderWindow->AddRenderer(renderer);
+
+    // Create an interactor
+    vtkSmartPointer<vtkRenderWindowInteractor> interactor = vtkSmartPointer<vtkRenderWindowInteractor>::New();
+    interactor->SetRenderWindow(renderWindow);
+
+    // Start the visualization
+    renderWindow->Render();
+    interactor->Start();
+}

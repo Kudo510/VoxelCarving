@@ -1,41 +1,52 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(voxel_carving)
 
-## Compile as C++11, supported in ROS Kinetic and newer
-# add_compile_options(-std=c++11)
+set(OpenCV_INCLUDE_DIRS
+  /usr/local/include
+  /usr/local/include/opencv2
+)
 
-## Find catkin macros and libraries
-## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
-## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
   red_msgs
   rospy
+  roscpp
   std_msgs
   sensor_msgs
+  OpenCV
 )
 
+catkin_python_setup()
 
 catkin_package(
-#  INCLUDE_DIRS include
-#  LIBRARIES voxel_carving
-#  CATKIN_DEPENDS red_msgs rospy stdmsgs
-#  DEPENDS system_lib
+   INCLUDE_DIRS include
+   CATKIN_DEPENDS red_msgs rospy roscpp
 )
 
+# required packages
+FIND_PACKAGE(VTK REQUIRED)
+# required macros and variables
+INCLUDE(${VTK_USE_FILE})
 
-include_directories(
-# include
-  ${catkin_INCLUDE_DIRS}
-)
 
-find_package( OpenCV REQUIRED )
+
 include_directories( 
+    ${catkin_INCLUDE_DIRS}
     include
-    ${OpenCV_INCLUDE_DIRS}
                       )
 
 
-catkin_install_python(PROGRAMS scripts/imageSaver.py
+
+add_executable(
+  voxel_carver 
+  src/voxelCarver.cpp
+  )
+target_link_libraries(voxel_carver ${catkin_LIBRARIES}
+                                  ${OpenCV_INCLUDE_DIRS}
+                                  ${YAML_CPP_LIBRARIES}
+                                  ${VTK_LIBRARIES})
+
+
+catkin_install_python(PROGRAMS scripts/imageSaver.py 
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

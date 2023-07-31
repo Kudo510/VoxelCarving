@@ -1,28 +1,34 @@
-from red_msgs.srv import ImageData, ImageDataResponse
+from red_msgs.srv import *
 from sensor_msgs.msg import Image as Sensor_Image
 import rospy
-import csv
+import cv2
 import numpy as np
 import rospkg
 import os
 from PIL import Image
 from base64 import decodestring
 from scipy.spatial.transform import Rotation as R
-
-
-# width of image 1280
-# height of image 720
+from utils.markerDetector import detect_markers, calculate_camera_pose
+from utils.voxelsegmentation import segmentation
+from cv_bridge import CvBridge
 
 class ImageSaver:
 
     def __init__(self) -> None:
 
         self.get_state_server = rospy.Service(
-            '/voxel_carving/save_image', ImageData, self.callback_save_image)
+            '/marker_detector/save_image', ImageData, self.callback_save_image)
         self.get_ar_image = rospy.Service(
-            '/voxel_carving/save_ar_image', ImageData, self.callback_save_ar_image)
+            '/marker_detector/save_ar_image', ImageData, self.callback_save_ar_image)
+        self.process_ar_image = rospy.Service(
+            '/marker_detector/process_ar_image', ArucoImage, self.callback_process_ar_image
+        )
+
         self.camera_subscriber = rospy.Subscriber(
             "/camera/color/image_raw", Sensor_Image, self.callback_new_image_from_camera)
+        
+        
+
 
         self.images = []
         self.header = ["data","pose"]
@@ -39,7 +45,7 @@ class ImageSaver:
     def callback_save_ar_image(self, req):
         rospack = rospkg.RosPack()
         rospy.loginfo("service called")
-        image_directory_path = rospack.get_path('voxel_carving')+"/../ar_images/"+req.file+".txt"
+        image_directory_path = rospack.get_path('voxel_carving')+"/../ar_images/"
         #image_directory_path = rospack.get_path('voxel_carving')+"/images/"
         directory = image_directory_path+req.file
         if not os.path.exists(directory):
@@ -47,10 +53,16 @@ class ImageSaver:
         path_of_image = directory+f"/image_{self.current_image_index}"
         image = Image.frombytes("RGB", (1280, 720), self.current_image["data"])
         image.save(path_of_image, "PNG")
-        self.current_image_index+=1
-        return ImageDataResponse()
 
-        
+        image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        _, markerCorners, markerIds = detect_markers(image.copy())
+        _, cameraPose, worldPoints = calculate_camera_pose(markerCorners,markerIds, image.copy())
+
+        with open(directory+"/poses.txt", mode='a') as file:
+            file.write(str(list(cameraPose.flatten()))+"\n")
+
+        self.current_image_index+=1
+        return ImageDataResponse()        
         
     def callback_save_image(self,req):
         # obtain first camera pose
@@ -94,19 +106,30 @@ class ImageSaver:
             directory = image_directory_path+req.file
             if not os.path.exists(directory):
                 os.makedirs(directory)
-            """
-            path_of_image = directory+f"/image{row_count}"
-            #image = Image.frombytes("RGB", (1280, 720), req.data)
-            image = Image.frombytes("RGB", (1280, 720), self.current_image["data"])
-            image.save(path_of_image, "PNG")
-            # write to csv file path of image and relative pose
-            #csv_writer.writerow([path_of_image,relative_pose.flatten()])
-            """
+
             file.write(str(list(camera_pose.flatten()))+"\n")
               
         return ImageDataResponse()
 
+    def callback_process_ar_image(self,req):
+
+        rospy.loginfo("process ar image service called")
+        image = Image.frombytes("RGB", (1280, 720), self.current_image["data"])
+        image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        _, markerCorners, markerIds = detect_markers(image.copy())
+        _, cameraPose, worldPoints = calculate_camera_pose(markerCorners,markerIds, image.copy())
+        
+        #segmented_image = segmentation(image, cameraPose, )
+        
+        response = ArucoImageResponse()
+        response.image = np.array(image).tobytes()
+        response.segmented_image = np.array(segmented_image).tobytes()
+        response.transform = cameraPose.flatten()
+        return response
+
 if __name__ == "__main__":
     rospy.init_node('image_saver')
+    rospy.loginfo("image saver spinning")
     s = ImageSaver()
     rospy.spin()
+    
