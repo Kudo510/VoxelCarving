@@ -86,6 +86,7 @@ make -j$(nproc)
 ./VoxelCarving ../red_block.json
 
 ```
-
+### References
+- [1]  Voxel-carving.  https://github.com/xocoatzin/Voxel-Carving, 2013.
 
 
